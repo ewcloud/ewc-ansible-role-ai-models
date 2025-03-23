@@ -1,0 +1,5 @@
+---
+ai_models_env_wipe: no
+ai_models_env_name: ai-models
+ai_models_env_path: "{{ conda_prefix }}/envs/{{ ai_models_env_name }}"
+ai_models_create_ipykernel: yes

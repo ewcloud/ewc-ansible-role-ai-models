@@ -1,0 +1,98 @@
+---
+- name: Wipe existing conda environment
+  ansible.builtin.file:
+    path: "{{ ai_models_env_path }}"
+    state: absent
+  when: ai_models_env_wipe
+
+- name: Copy conda environment description
+  ansible.builtin.copy:
+    src: "env.yml"
+    dest: /tmp/{{ ai_models_env_name }}.yml
+    mode: "644"
+  register: ai_models_env_updated
+
+- name: Create conda environment
+  become_user: "{{ conda_user | default(root)}}"
+  ansible.builtin.shell: |
+    source /etc/profile.d/conda.sh
+    source /etc/profile.d/mamba.sh
+    export PIP_NO_CACHE_DIR=false
+    mamba env create -f /tmp/{{ ai_models_env_name }}.yml -p {{ ai_models_env_path }} && mamba clean --all -y
+  args:
+    executable: /bin/bash
+    creates: "{{ ai_models_env_path }}"
+
+  register: ai_models_env_create
+
+- name: Update conda environment
+  become_user: "{{ conda_user | default(root)}}"
+  ansible.builtin.shell: |
+    source /etc/profile.d/conda.sh
+    source /etc/profile.d/mamba.sh
+    export PIP_NO_CACHE_DIR=false
+    mamba env update --prune -f /tmp/{{ ai_models_env_name }}.yml -p {{ ai_models_env_path }} && mamba clean --all -y
+  args:
+    executable: /bin/bash
+  when: not ai_models_env_create.changed and ai_models_env_updated.changed
+
+- name: Get Python interpreter path
+  ansible.builtin.shell: |
+    source /etc/profile.d/conda.sh
+    source /etc/profile.d/mamba.sh
+    mamba run -p {{ai_models_env_path}} python3 -c 'import site; print(site.getsitepackages()[0])'
+  args:
+    executable: /bin/bash
+  register: site_packages_path
+  changed_when: false
+
+- name: Check current onnxruntime library rpath
+  ansible.builtin.shell: |
+    source /etc/profile.d/conda.sh
+    source /etc/profile.d/mamba.sh
+    mamba run -p {{ai_models_env_path}} patchelf --print-rpath {{ site_packages_path.stdout }}/onnxruntime/capi/libonnxruntime_providers_cuda.so
+  args:
+    executable: /bin/bash
+  register: current_rpath
+  changed_when: false
+
+- name: Modify onnxruntime library rpath if not already set
+  ansible.builtin.shell: |
+    source /etc/profile.d/conda.sh
+    source /etc/profile.d/mamba.sh
+    mamba run -p {{ai_models_env_path}} patchelf --add-rpath "\$ORIGIN/../../nvidia/cuda_runtime/lib/:\$ORIGIN/../../nvidia/cublas/lib/:\$ORIGIN/../../nvidia/curand/lib/:\$ORIGIN/../../nvidia/cufft/lib/:\$ORIGIN/../../nvidia/cudnn/lib/:\$ORIGIN/../../nvidia/cuda_nvrtc/lib/" {{ site_packages_path.stdout }}/onnxruntime/capi/libonnxruntime_providers_cuda.so
+  args:
+    executable: /bin/bash
+  when: >
+    current_rpath.rc != 0 or
+    not current_rpath.stdout is search('cuda_runtime|cublas|curand|cufft|cudnn|cuda_nvrtc')
+
+- name: Fix fourcastnet models with newer torch
+  ansible.builtin.replace:
+    path: "{{ site_packages_path.stdout }}/ai_models_{{ item }}/model.py"
+    regexp: 'torch.load\(checkpoint_file, map_location=self.device\)'
+    replace: 'torch.load(checkpoint_file, map_location=self.device, weights_only=False)'
+    backup: yes
+  loop:
+    - fourcastnet
+    - fourcastnetv2
+
+- name: Override haiku installation
+  become_user: "{{ conda_user | default(root)}}"
+  ansible.builtin.shell: |
+    source /etc/profile.d/conda.sh
+    source /etc/profile.d/mamba.sh
+    export PIP_NO_CACHE_DIR=false
+    mamba run -p {{ai_models_env_path}} pip3 install "dm-haiku>=0.0.13"
+  args:
+    executable: /bin/bash
+
+- name: Make ipykernel available for Jupyter
+  ansible.builtin.shell: |
+    source /etc/profile.d/conda.sh
+    source /etc/profile.d/mamba.sh
+    mamba run -p {{ ai_models_env_path }} python3 -m ipykernel install --prefix=/usr/local --name="{{ ai_models_env_name }}" --display-name="{{ ai_models_env_name }}" --env PATH "{{ ai_models_env_path }}/bin:\$PATH"
+  args:
+    executable: /bin/bash
+    creates: /usr/local/share/jupyter/kernels/{{ ai_models_env_name }}
+  when: ai_models_create_ipykernel
