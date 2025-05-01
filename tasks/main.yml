@@ -18,7 +18,7 @@
     source /etc/profile.d/conda.sh
     source /etc/profile.d/mamba.sh
     export PIP_NO_CACHE_DIR=false
-    mamba env create -f /tmp/{{ ai_models_env_name }}.yml -p {{ ai_models_env_path }} && mamba clean --all -y
+    mamba env create -y -f /tmp/{{ ai_models_env_name }}.yml -p {{ ai_models_env_path }} && mamba clean --all -y
   args:
     executable: /bin/bash
     creates: "{{ ai_models_env_path }}"
@@ -31,7 +31,7 @@
     source /etc/profile.d/conda.sh
     source /etc/profile.d/mamba.sh
     export PIP_NO_CACHE_DIR=false
-    mamba env update --prune -f /tmp/{{ ai_models_env_name }}.yml -p {{ ai_models_env_path }} && mamba clean --all -y
+    mamba env update --prune -y -f /tmp/{{ ai_models_env_name }}.yml -p {{ ai_models_env_path }} && mamba clean --all -y
   args:
     executable: /bin/bash
   when: not ai_models_env_create.changed and ai_models_env_updated.changed
